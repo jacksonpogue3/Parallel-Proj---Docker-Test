@@ -7,7 +7,8 @@
 #include <omp.h>
 #include <stdbool.h>
 
-#define BATCH_SIZE 13000000
+#define BATCH_SIZE 1000000
+#define NUM_BATCHES 13
 #define MAX_LINE_LENGTH 256
 
 void swap(int *a, int *b) {
@@ -63,23 +64,19 @@ int extractDepartureTime(char *line) {
     char *start = line;
     char *end;
 
-    // Walk through the line, find the start of the 6th field
     while (*line && commas < 5) {
         if (*line == ',') commas++;
         line++;
     }
 
-    if (commas < 5) return -1; // Not enough fields
+    if (commas < 5) return -1;
 
-    // We're now at the start of column 6
     end = line;
     while (*end && *end != ',') end++;
 
-    // Temporarily null-terminate this field
     char temp = *end;
     *end = '\0';
 
-    // Strip quotes and newlines
     if (line[0] == '"') line++;
     line[strcspn(line, "\"\r\n")] = '\0';
 
@@ -89,10 +86,9 @@ int extractDepartureTime(char *line) {
     int result = strtol(line, &parse_end, 10);
     if (*parse_end != '\0') return -1;
 
-    *end = temp; // restore line
+    *end = temp;
     return result;
 }
-
 
 int main() {
     printf("Program started...\n");
@@ -113,7 +109,7 @@ int main() {
     }
 
     int *batch = (int *)malloc(sizeof(int) * BATCH_SIZE);
-    if (batch == NULL) {
+    if (!batch) {
         printf("Memory allocation failed!\n");
         fclose(fp);
         return 1;
@@ -123,7 +119,7 @@ int main() {
     int batch_num = 1;
     int total_valid_lines = 0;
 
-    while (fgets(line, sizeof(line), fp)) {
+    while (fgets(line, sizeof(line), fp) && batch_num <= NUM_BATCHES) {
         char *line_copy = strdup(line);
         if (!line_copy) continue;
 
@@ -150,7 +146,7 @@ int main() {
             }
 
             double start = omp_get_wtime();
-            omp_set_num_threads(2);
+            omp_set_num_threads(4);  // Change to 1 or 2 as needed
             #pragma omp parallel
             {
                 #pragma omp single
@@ -167,41 +163,14 @@ int main() {
         }
     }
 
-    if (index > 0) {
-        bool already_sorted = true;
-        for (int i = 1; i < index; i++) {
-            if (batch[i] < batch[i - 1]) {
-                already_sorted = false;
-                break;
-            }
-        }
-
-        if (already_sorted) {
-            printf("Final batch #%d was already sorted!\n", batch_num);
-            fflush(stdout);
-        }
-
-        double start = omp_get_wtime();
-        omp_set_num_threads(4);
-        #pragma omp parallel
-        {
-            #pragma omp single
-            quickSortParallel(batch, 0, index - 1, 0);
-        }
-        double end = omp_get_wtime();
-
-        printf("Final batch #%d: Sorted %d entries in %.6f seconds\n", batch_num, index, end - start);
-        fflush(stdout);
-        printMemoryUsageKB();
-    }
+    free(batch);
+    fclose(fp);
 
     printf("Total valid lines processed: %d\n", total_valid_lines);
     fflush(stdout);
-
-    free(batch);
-    fclose(fp);
     return 0;
 }
+
 
 
 

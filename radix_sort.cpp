@@ -1,50 +1,13 @@
-// === BATCHED MERGE SORT ONLY ===
-// Processes 1,000,000 entries at a time from a large CSV (trips.csv),
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <omp.h>
+#include <stdbool.h>
 
 #define BATCH_SIZE 1000000
-#define NUM_BATCHES 13
 #define MAX_LINE_LENGTH 256
-
-void merge(int arr[], int l, int m, int r) {
-    int n1 = m - l + 1;
-    int n2 = r - m;
-    int *L = (int *)malloc(sizeof(int) * n1);
-    int *R = (int *)malloc(sizeof(int) * n2);
-
-    for (int i = 0; i < n1; i++) L[i] = arr[l + i];
-    for (int j = 0; j < n2; j++) R[j] = arr[m + 1 + j];
-
-    int i = 0, j = 0, k = l;
-    while (i < n1 && j < n2)
-        arr[k++] = (L[i] <= R[j]) ? L[i++] : R[j++];
-    while (i < n1) arr[k++] = L[i++];
-    while (j < n2) arr[k++] = R[j++];
-
-    free(L);
-    free(R);
-}
-
-void mergeSortParallel(int arr[], int l, int r, int depth) {
-    if (l < r) {
-        int m = (l + r) / 2;
-        if (depth < 3) {
-            #pragma omp task shared(arr)
-            mergeSortParallel(arr, l, m, depth + 1);
-            #pragma omp task shared(arr)
-            mergeSortParallel(arr, m + 1, r, depth + 1);
-            #pragma omp taskwait
-        } else {
-            mergeSortParallel(arr, l, m, depth + 1);
-            mergeSortParallel(arr, m + 1, r, depth + 1);
-        }
-        merge(arr, l, m, r);
-    }
-}
+#define MAX_DIGIT 10
 
 void printMemoryUsageKB() {
     FILE *fp = fopen("/proc/self/status", "r");
@@ -90,8 +53,44 @@ int extractDepartureTime(char *line) {
     return result;
 }
 
+int getMax(int arr[], int n) {
+    int max = arr[0];
+    for (int i = 1; i < n; i++)
+        if (arr[i] > max)
+            max = arr[i];
+    return max;
+}
+
+void countSort(int arr[], int n, int exp) {
+    int output[n];
+    int count[MAX_DIGIT] = {0};
+
+
+    for (int i = 0; i < n; i++)
+        count[(arr[i] / exp) % 10]++;
+
+    for (int i = 1; i < MAX_DIGIT; i++)
+        count[i] += count[i - 1];
+
+    for (int i = n - 1; i >= 0; i--) {
+        int digit = (arr[i] / exp) % 10;
+        output[count[digit] - 1] = arr[i];
+        count[digit]--;
+    }
+
+    for (int i = 0; i < n; i++)
+        arr[i] = output[i];
+}
+
+void radixSort(int arr[], int n) {
+    int max = getMax(arr, n);
+    for (int exp = 1; max / exp > 0; exp *= 10)
+        countSort(arr, n, exp);
+}
+
 int main() {
     printf("Program started...\n");
+    omp_set_num_threads(4); // 👈 Change this to 2 or 4 later
     fflush(stdout);
 
     FILE *fp = fopen("trips.csv", "r");
@@ -110,35 +109,28 @@ int main() {
 
     int *batch = (int *)malloc(sizeof(int) * BATCH_SIZE);
     if (!batch) {
-        printf("Memory allocation failed!\n");
+        printf("Memory allocation failed\n");
         fclose(fp);
         return 1;
     }
 
-    int index = 0;
-    int batch_num = 1;
-    int total_valid_lines = 0;
+    int index = 0, batch_num = 1, total_valid = 0;
 
-    while (fgets(line, sizeof(line), fp) && batch_num <= NUM_BATCHES) {
-        char *line_copy = strdup(line);
-        if (!line_copy) continue;
+    while (fgets(line, sizeof(line), fp) && batch_num <= 13) {
+        char *copy = strdup(line);
+        if (!copy) continue;
 
-        int time = extractDepartureTime(line_copy);
-        free(line_copy);
+        int time = extractDepartureTime(copy);
+        free(copy);
 
         if (time < 0) continue;
 
         batch[index++] = time;
-        total_valid_lines++;
+        total_valid++;
 
         if (index == BATCH_SIZE) {
             double start = omp_get_wtime();
-            omp_set_num_threads(4);  // Change to 1 or 2 as needed
-            #pragma omp parallel
-            {
-                #pragma omp single
-                mergeSortParallel(batch, 0, index - 1, 0);
-            }
+            radixSort(batch, index);
             double end = omp_get_wtime();
 
             printf("Batch #%d: Sorted %d entries in %.6f seconds\n", batch_num, index, end - start);
@@ -150,11 +142,17 @@ int main() {
         }
     }
 
+    if (index > 0 && batch_num <= 13) {
+        double start = omp_get_wtime();
+        radixSort(batch, index);
+        double end = omp_get_wtime();
+        printf("Final batch #%d: Sorted %d entries in %.6f seconds\n", batch_num, index, end - start);
+        printMemoryUsageKB();
+    }
+
+    printf("Total valid lines processed: %d\n", total_valid);
+    fflush(stdout);
     free(batch);
     fclose(fp);
-
-    printf("Total valid lines processed: %d\n", total_valid_lines);
-    fflush(stdout);
     return 0;
 }
-
